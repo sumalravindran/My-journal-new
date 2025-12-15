@@ -1,10 +1,36 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { JournalEntry, CalendarEvent, ChatMessage, FinanceTransaction, Task } from "../types";
 
-// Primary Model: Gemini 3.0 Pro for best reasoning
-const MODEL_NAME = "gemini-3-pro-preview"; 
-// Fallback Model: Gemini 2.5 Flash for stability/speed if Pro fails
-const FALLBACK_MODEL = "gemini-2.5-flash";
+// Primary Model: Gemini 2.5 Flash for speed and stability
+const MODEL_NAME = "gemini-2.5-flash"; 
+// Fallback/Alternative: Gemini 3.0 Pro for complex tasks (optional)
+const FALLBACK_MODEL = "gemini-2.5-flash"; // Keep consistent for stability
+
+// Helper for delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper: Run with Exponential Backoff Retry
+async function runWithRetry<T>(operation: () => Promise<T>, retries = 3): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      // Check for Rate Limit (429) or Server Overload (503/500)
+      const isRateLimit = error.status === 429 || error.message?.includes('429') || error.message?.includes('quota');
+      const isServerIssue = error.status === 503 || error.status === 500 || error.message?.includes('503') || error.message?.includes('500') || error.message?.includes('Internal error');
+
+      if ((isRateLimit || isServerIssue) && i < retries - 1) {
+        // Exponential backoff: 2s, 4s, 8s
+        const waitTime = 2000 * Math.pow(2, i);
+        console.warn(`Gemini API Error (${error.status}). Retrying in ${waitTime}ms... (Attempt ${i + 1}/${retries})`);
+        await delay(waitTime);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
 
 // Helper to check for key presence
 export const getApiKey = (): string | undefined => {
@@ -14,20 +40,20 @@ export const getApiKey = (): string | undefined => {
     if (localKey) return localKey;
   }
 
-  // 2. Check Vite Environment Variables (Common for React+Vite)
+  // 2. Check Vite Environment Variables (Crucial for Vercel)
+  // Vite exposes env vars on import.meta.env
   try {
     // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      // @ts-ignore
-      if (import.meta.env.VITE_API_KEY) return import.meta.env.VITE_API_KEY;
+    if (import.meta.env && import.meta.env.VITE_API_KEY) {
+        // @ts-ignore
+        return import.meta.env.VITE_API_KEY;
     }
   } catch (e) {}
 
-  // 3. Check Standard Process Env
+  // 3. Fallback check for process.env (rarely needed in Vite but good backup)
   try {
     if (typeof process !== 'undefined' && process.env) {
        if (process.env.API_KEY) return process.env.API_KEY;
-       if (process.env.REACT_APP_API_KEY) return process.env.REACT_APP_API_KEY;
     }
   } catch (e) {}
 
@@ -114,42 +140,44 @@ export const sendMessageToGemini = async (
       parts: [{ text: msg.text }]
   }));
 
-  // Define generation helper to allow retries
+  // Define generation helper
   const generateResponse = async (useSearch: boolean, model: string = MODEL_NAME) => {
-    const config: any = { systemInstruction };
-    if (useSearch) {
-        config.tools = [{ googleSearch: {} }];
-    }
-
-    const chat = ai.chats.create({
-        model: model,
-        config,
-        history: previousHistory
-    });
-
-    if (attachment) {
-        if (attachment.type === 'image' && attachment.mimeType) {
-            // Send Image + Text
-            return await chat.sendMessage({ 
-                message: [
-                    { text: newMessage },
-                    { 
-                        inlineData: { 
-                            mimeType: attachment.mimeType, 
-                            data: attachment.content // base64 string
-                        } 
-                    }
-                ]
-            });
-        } else {
-            // Text file content - append to message
-            const combinedMessage = `${newMessage}\n\n[ATTACHED FILE CONTENT]:\n${attachment.content}`;
-            return await chat.sendMessage({ message: combinedMessage });
+    return runWithRetry(async () => {
+        const config: any = { systemInstruction };
+        if (useSearch) {
+            config.tools = [{ googleSearch: {} }];
         }
-    } else {
-        // Standard text message
-        return await chat.sendMessage({ message: newMessage });
-    }
+
+        const chat = ai.chats.create({
+            model: model,
+            config,
+            history: previousHistory
+        });
+
+        if (attachment) {
+            if (attachment.type === 'image' && attachment.mimeType) {
+                // Send Image + Text
+                return await chat.sendMessage({ 
+                    message: [
+                        { text: newMessage },
+                        { 
+                            inlineData: { 
+                                mimeType: attachment.mimeType, 
+                                data: attachment.content // base64 string
+                            } 
+                        }
+                    ]
+                });
+            } else {
+                // Text file content - append to message
+                const combinedMessage = `${newMessage}\n\n[ATTACHED FILE CONTENT]:\n${attachment.content}`;
+                return await chat.sendMessage({ message: combinedMessage });
+            }
+        } else {
+            // Standard text message
+            return await chat.sendMessage({ message: newMessage });
+        }
+    });
   };
 
   try {
@@ -157,7 +185,6 @@ export const sendMessageToGemini = async (
       const result = await generateResponse(true, MODEL_NAME);
 
       if (!result.text) {
-          console.warn("Gemini returned empty text", result);
           return "I received your message, but I couldn't generate a response. (Empty response from AI)";
       }
 
@@ -166,7 +193,6 @@ export const sendMessageToGemini = async (
       // Extract Grounding (Search Results)
       const groundingChunks = result.candidates?.[0]?.groundingMetadata?.groundingChunks;
       
-      // Filter logic: Only show sources if explicitly asked
       const showSources = /source|reference|link|citation|where did you|where from/i.test(newMessage);
 
       if (groundingChunks && showSources) {
@@ -181,38 +207,31 @@ export const sendMessageToGemini = async (
 
       return finalText;
   } catch (error: any) {
-      // Fallback 1: If 403 Permission Denied (common if Grounding is not enabled on the key), retry without tools
+      // Fallback 1: If 403 Permission Denied (Grounding off), retry without tools
       if (error.status === 403 || error.toString().includes('403') || error.toString().includes('PERMISSION_DENIED')) {
           console.warn("Search Grounding 403 Forbidden. Retrying without search...");
           try {
               const retryResult = await generateResponse(false, MODEL_NAME);
               return retryResult.text || "I'm having trouble connecting to the tools, but I heard you.";
           } catch (retryError) {
-              // If model 3.0 still fails, try fallback
               try {
                   const fallbackResult = await generateResponse(false, FALLBACK_MODEL);
                   return fallbackResult.text || "I'm having trouble thinking, but I'm here.";
               } catch(finalError) {
-                  console.error("Retry failed", finalError);
                   throw finalError;
               }
           }
       }
       
-      // Fallback 2: If 500 Internal Error (Model Overload), retry with Fallback Model
-      if (error.status === 500 || error.toString().includes('500') || error.toString().includes('Internal error')) {
-           console.warn(`Model ${MODEL_NAME} 500 Error. Retrying with ${FALLBACK_MODEL}`);
-           try {
-               const fallbackResult = await generateResponse(false, FALLBACK_MODEL);
-               return fallbackResult.text || "I experienced a hiccup, but I'm back.";
-           } catch(finalError) {
-               console.error("Fallback failed", finalError);
-               throw finalError;
-           }
+      // Fallback 2: General Retry with Flash if Pro fails (already retried inside runWithRetry, but switching models)
+      try {
+           console.warn(`Model ${MODEL_NAME} failed. Switching to ${FALLBACK_MODEL}`);
+           const fallbackResult = await generateResponse(false, FALLBACK_MODEL);
+           return fallbackResult.text || "I experienced a hiccup, but I'm back.";
+      } catch(finalError) {
+           console.error("All Chat Fallbacks failed", finalError);
+           throw finalError;
       }
-      
-      console.error("Chat Error", error);
-      throw error; // Re-throw to be handled by UI
   }
 };
 
@@ -245,30 +264,27 @@ export const chatWithJournal = async (
     }));
   
     const runChat = async (model: string) => {
-        const chat = ai.chats.create({
-            model: model,
-            config: { systemInstruction },
-            history: previousMessages
+        return runWithRetry(async () => {
+            const chat = ai.chats.create({
+                model: model,
+                config: { systemInstruction },
+                history: previousMessages
+            });
+            return await chat.sendMessage({ message: lastMessage.text });
         });
-        return await chat.sendMessage({ message: lastMessage.text });
     };
 
     try {
         const result = await runChat(MODEL_NAME);
         return result.text || "";
     } catch (error: any) {
-        // Fallback to Flash if Pro fails
-        if (error.status === 500 || error.toString().includes('500') || error.toString().includes('Internal error')) {
-            try {
-                const result = await runChat(FALLBACK_MODEL);
-                return result.text || "";
-            } catch (e) {
-                console.error("Journal Chat Fallback Error", e);
-                return "I'm having trouble analyzing your journal right now.";
-            }
+        try {
+            const result = await runChat(FALLBACK_MODEL);
+            return result.text || "";
+        } catch (e) {
+            console.error("Journal Chat Fallback Error", e);
+            return "I'm having trouble analyzing your journal right now due to connection limits.";
         }
-        console.error("Journal Chat Error", error);
-        return "I'm having trouble analyzing your journal right now.";
     }
 };
 
@@ -282,7 +298,6 @@ export const chatWithFinance = async (
   
     const ai = new GoogleGenAI({ apiKey });
     
-    // Convert transactions to CSV-like context with Indian Rupee symbol
     const contextData = transactions.map(t => 
         `${t.date.split('T')[0]}, ${t.type}, ${t.category}, ₹${t.amount}, "${t.description}"`
     ).join('\n');
@@ -303,28 +318,26 @@ export const chatWithFinance = async (
     }));
   
     const runChat = async (model: string) => {
-        const chat = ai.chats.create({
-            model: model,
-            config: { systemInstruction },
-            history: previousMessages
+        return runWithRetry(async () => {
+            const chat = ai.chats.create({
+                model: model,
+                config: { systemInstruction },
+                history: previousMessages
+            });
+            return await chat.sendMessage({ message: lastMessage.text });
         });
-        return await chat.sendMessage({ message: lastMessage.text });
     };
   
     try {
         const result = await runChat(MODEL_NAME);
         return result.text || "";
     } catch (error: any) {
-        if (error.status === 500 || error.toString().includes('500') || error.toString().includes('Internal error')) {
-             try {
-                const result = await runChat(FALLBACK_MODEL);
-                return result.text || "";
-            } catch (e) {
-                return "I'm having trouble analyzing your financial data right now.";
-            }
+         try {
+            const result = await runChat(FALLBACK_MODEL);
+            return result.text || "";
+        } catch (e) {
+            return "I'm having trouble analyzing your financial data right now.";
         }
-        console.error("Finance Chat Error", error);
-        return "I'm having trouble analyzing your financial data right now.";
     }
 };
 
@@ -340,10 +353,8 @@ export const generateEntryFromChat = async (
     
     const contextTranscript = contextMessages.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n');
     const newTranscript = newMessages.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n');
-
-    // Get robust local time string for the AI
     const now = new Date();
-    const localTimeString = now.toString(); // e.g. "Fri Oct 27 2023 10:30:00 GMT+0530 (India Standard Time)"
+    const localTimeString = now.toString();
 
     const prompt = `
       You are an intelligent Journal Clerk.
@@ -358,24 +369,18 @@ export const generateEntryFromChat = async (
       Identify ANY personal event, activity, travel, purchase, or visit.
       
       *** CAPTURE RULES ***
-      1. **ALWAYS RECORD** actions described in past tense (e.g., "I visited...", "I went...", "I saw...", "I bought...", "I had visited...").
-      2. **SHORT INPUTS ARE VALID**: Even a short sentence like "I visited the temple" MUST be recorded.
+      1. **ALWAYS RECORD** actions described in past tense.
+      2. **SHORT INPUTS ARE VALID**: Even "visited temple" MUST be recorded.
       3. **REPHRASE**: Convert short inputs into a polite, complete narrative sentence.
-         - Input: "visited temple"
-         - Content: "I visited the temple today for a peaceful evening."
       
       *** IMPORTANT: FILTERING RULES ***
-      - Set "hasContent" to **FALSE** if the input is purely:
-        a) A command to schedule an event (e.g., "Meeting tomorrow at 9", "Schedule dentist").
-        b) A command to add a task (e.g., "Buy milk", "Remind me to call John").
-        c) "Hi", "Hello", or a generic question.
-        d) **REDUNDANT**: If the NEW INPUT just provides minor detail to the PRIOR CONTEXT (e.g., Context: "I went to the beach", New: "It was sunny"), do NOT create a new entry.
-      - Set "hasContent" to **TRUE** ONLY if the input contains a distinct personal log, memory, reflection, or description of something that happened.
+      - Set "hasContent" to **FALSE** if input is pure commands, greetings, or redundant details.
+      - Set "hasContent" to **TRUE** ONLY if input contains personal log/memory/description.
       
       If you find such content:
       1. **Set hasContent to TRUE**.
-      2. **Create a Title** (e.g. "Temple Visit").
-      3. **Create Content** (The rephrased narrative).
+      2. **Create a Title**.
+      3. **Create Content**.
       
       CURRENCY: Indian Rupees (INR/₹). Defaults to INR if symbol is missing.
       MODE: Personal Diary.
@@ -388,59 +393,61 @@ export const generateEntryFromChat = async (
     `;
 
     const generate = async (model: string) => {
-        return await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                    hasContent: { type: Type.BOOLEAN, description: "Set to TRUE only for personal narratives/logs. FALSE for pure commands/tasks." },
-                    title: { type: Type.STRING, description: "A short, engaging title." },
-                    content: { type: Type.STRING, description: "The rephrased journal note." },
-                    tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    calendarEvents: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                title: { type: Type.STRING },
-                                startTime: { type: Type.STRING },
-                                endTime: { type: Type.STRING },
-                                description: { type: Type.STRING }
-                            },
-                            required: ["title", "startTime", "endTime"]
+        return runWithRetry(async () => {
+            return await ai.models.generateContent({
+                model: model,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                        hasContent: { type: Type.BOOLEAN, description: "Set to TRUE only for personal narratives/logs. FALSE for pure commands/tasks." },
+                        title: { type: Type.STRING, description: "A short, engaging title." },
+                        content: { type: Type.STRING, description: "The rephrased journal note." },
+                        tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        calendarEvents: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { type: Type.STRING },
+                                    startTime: { type: Type.STRING },
+                                    endTime: { type: Type.STRING },
+                                    description: { type: Type.STRING }
+                                },
+                                required: ["title", "startTime", "endTime"]
+                            }
+                        },
+                        tasks: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { type: Type.STRING },
+                                    dueDate: { type: Type.STRING }
+                                },
+                                required: ["title"]
+                            }
+                        },
+                        transactions: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    description: { type: Type.STRING },
+                                    amount: { type: Type.NUMBER },
+                                    type: { type: Type.STRING, enum: ["income", "expense"] },
+                                    category: { type: Type.STRING },
+                                    date: { type: Type.STRING }
+                                },
+                                required: ["amount", "type", "description"]
+                            }
                         }
-                    },
-                    tasks: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                title: { type: Type.STRING },
-                                dueDate: { type: Type.STRING }
-                            },
-                            required: ["title"]
                         }
-                    },
-                    transactions: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                description: { type: Type.STRING },
-                                amount: { type: Type.NUMBER },
-                                type: { type: Type.STRING, enum: ["income", "expense"] },
-                                category: { type: Type.STRING },
-                                date: { type: Type.STRING }
-                            },
-                            required: ["amount", "type", "description"]
-                        }
-                    }
                     }
                 }
-            }
+            });
         });
     };
   
@@ -450,21 +457,17 @@ export const generateEntryFromChat = async (
         text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
         return JSON.parse(text);
     } catch (error: any) {
-        // Fallback for logic extraction
-        if (error.status === 500 || error.toString().includes('500') || error.toString().includes('Internal error')) {
-            try {
-                console.warn("Entry Generation Fallback to Flash");
-                const response = await generate(FALLBACK_MODEL);
-                let text = response.text || "{}";
-                text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-                return JSON.parse(text);
-            } catch(e) {
-                console.error("Consolidation Fallback Error", e);
-                return {};
-            }
+        // Retry with Flash
+        try {
+            console.warn("Entry Generation Fallback to Flash");
+            const response = await generate(FALLBACK_MODEL);
+            let text = response.text || "{}";
+            text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+            return JSON.parse(text);
+        } catch(e) {
+            console.error("Consolidation Error (All retries failed)", e);
+            return {};
         }
-        console.error("Consolidation Error", error);
-        return {};
     }
   };
 
@@ -474,8 +477,6 @@ export const processUploadedFile = async (text: string): Promise<any> => {
     if (!apiKey) throw new Error("API Key not found");
   
     const ai = new GoogleGenAI({ apiKey });
-    
-    // Safety truncate to fit context window comfortably
     const safeText = text.slice(0, 50000); 
 
     const prompt = `
@@ -492,71 +493,67 @@ export const processUploadedFile = async (text: string): Promise<any> => {
     `;
 
     const generate = async (model: string) => {
-        return await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        entries: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    title: { type: Type.STRING },
-                                    content: { type: Type.STRING },
-                                    date: { type: Type.STRING },
-                                    tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+        return runWithRetry(async () => {
+            return await ai.models.generateContent({
+                model: model,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            entries: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        title: { type: Type.STRING },
+                                        content: { type: Type.STRING },
+                                        date: { type: Type.STRING },
+                                        tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+                                    }
                                 }
-                            }
-                        },
-                        transactions: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    description: { type: Type.STRING },
-                                    amount: { type: Type.NUMBER },
-                                    type: { type: Type.STRING, enum: ["income", "expense"] },
-                                    category: { type: Type.STRING },
-                                    date: { type: Type.STRING }
+                            },
+                            transactions: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        description: { type: Type.STRING },
+                                        amount: { type: Type.NUMBER },
+                                        type: { type: Type.STRING, enum: ["income", "expense"] },
+                                        category: { type: Type.STRING },
+                                        date: { type: Type.STRING }
+                                    }
                                 }
+                            },
+                            unstructured_summary: {
+                                type: Type.STRING,
+                                description: "Use this if no distinct entries are found, but there is content to save."
                             }
-                        },
-                        unstructured_summary: {
-                            type: Type.STRING,
-                            description: "Use this if no distinct entries are found, but there is content to save."
                         }
                     }
                 }
-            }
+            });
         });
     }
 
     try {
-        // Try Primary Model (3.0 Pro)
         const response = await generate(MODEL_NAME);
         let text = response.text || "{}";
         text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
         return JSON.parse(text);
     } catch (error: any) {
-        // Fallback logic for 500 errors
-        if (error.status === 500 || error.toString().includes('500') || error.toString().includes('Internal error')) {
-            console.warn(`Import: Primary model ${MODEL_NAME} failed (500), retrying with ${FALLBACK_MODEL}`);
-            try {
-                const response = await generate(FALLBACK_MODEL);
-                let text = response.text || "{}";
-                text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-                return JSON.parse(text);
-            } catch (retryError) {
-                 console.error("Import parsing error (Fallback failed)", retryError);
-                 throw retryError;
-            }
+        try {
+            console.warn(`Import: Primary model failed, retrying with ${FALLBACK_MODEL}`);
+            const response = await generate(FALLBACK_MODEL);
+            let text = response.text || "{}";
+            text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+            return JSON.parse(text);
+        } catch (retryError) {
+             console.error("Import parsing error (Fallback failed)", retryError);
+             throw retryError;
         }
-        console.error("Import parsing error", error);
-        return {};
     }
 }
 

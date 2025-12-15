@@ -195,11 +195,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onUpdateMessage
         };
         onUpdateMessages([...newHistory, aiMsg]);
     } catch (error: any) {
-        console.error(error);
+        console.error("Chat Interface Error Catch:", error);
+        
         let errorMsg = "I'm having trouble connecting right now.";
         
         if (error.message === 'MISSING_API_KEY') {
             errorMsg = "⚠️ API Key Missing. Please go to the Settings tab (⚙️) and enter your Gemini API Key to enable AI features.";
+        } else if (error.message && (error.message.includes('429') || error.message.includes('quota'))) {
+             errorMsg = "⚠️ Quota Exceeded. The AI is temporarily unavailable due to high usage. Please try again in a few moments.";
+        } else if (error.message) {
+            // Show exact error to help debugging
+            errorMsg = `⚠️ Error: ${error.message}`;
         }
         
         const aiMsg: ChatMessage = {

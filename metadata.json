@@ -1,0 +1,7 @@
+{
+  "name": "My Personal Journal",
+  "description": "An intelligent personal journal powered by Gemini AI, featuring simulated cloud sync, calendar integration, and smart content analysis.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FinanceTransaction } from '../types';
-import { DollarSign, Send, Bot, Wallet, Sparkles, Search, ArrowUpRight, ArrowDownLeft, Filter, Mic, MicOff } from 'lucide-react';
+import { DollarSign, Send, Bot, Wallet, Sparkles, Search, ArrowUpRight, ArrowDownLeft, Filter, Mic, MicOff, Plus, X, Edit2, Trash2, CheckCircle } from 'lucide-react';
 import { chatWithFinance } from '../services/geminiService';
+import { saveTransaction, deleteTransaction } from '../services/storageService';
 
 interface FinanceViewProps {
   transactions: FinanceTransaction[];
+  onTransactionsChange: () => void;
 }
 
-const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
+const FinanceView: React.FC<FinanceViewProps> = ({ transactions, onTransactionsChange }) => {
   // Chat State
   const [messages, setMessages] = useState<{id: string, role: string, text: string}[]>([]);
   const [input, setInput] = useState('');
@@ -18,6 +20,13 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
   const recognitionRef = useRef<any>(null);
   
   const [searchTerm, setSearchTerm] = useState('');
+
+  // --- Modal State ---
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingTx, setEditingTx] = useState<Partial<FinanceTransaction>>({
+      type: 'expense',
+      date: new Date().toISOString().split('T')[0]
+  });
 
   // Auto-scroll chat
   useEffect(() => {
@@ -103,6 +112,54 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
     }
   };
 
+  // --- CRUD Operations ---
+  const handleOpenAdd = () => {
+      setEditingTx({
+          id: undefined,
+          type: 'expense',
+          description: '',
+          amount: 0,
+          category: 'General',
+          date: new Date().toISOString().split('T')[0]
+      });
+      setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (tx: FinanceTransaction) => {
+      setEditingTx({
+          ...tx,
+          date: tx.date.split('T')[0] // Ensure date input format
+      });
+      setIsModalOpen(true);
+  };
+
+  const handleDelete = (id: string) => {
+      if(window.confirm("Are you sure you want to delete this transaction?")) {
+          deleteTransaction(id);
+          onTransactionsChange();
+      }
+  };
+
+  const handleSaveTx = () => {
+      if (!editingTx.description || !editingTx.amount || !editingTx.date) {
+          alert("Please fill in description and amount.");
+          return;
+      }
+
+      const txToSave: FinanceTransaction = {
+          id: editingTx.id || Date.now().toString(),
+          description: editingTx.description,
+          amount: Number(editingTx.amount),
+          type: editingTx.type || 'expense',
+          category: editingTx.category || 'General',
+          date: editingTx.date // ISO date string from input
+      };
+
+      saveTransaction(txToSave);
+      onTransactionsChange();
+      setIsModalOpen(false);
+  };
+
   const filteredTransactions = transactions
     .filter(t => 
         t.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -111,10 +168,90 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
     .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   return (
-    <div className="h-full flex flex-col gap-4 p-2 lg:p-4">
+    <div className="h-full flex flex-col gap-4 p-2 lg:p-4 relative">
         
+        {/* MANUAL ENTRY MODAL */}
+        {isModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+                <div className="bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-700 shadow-2xl overflow-hidden">
+                    <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+                        <h3 className="font-bold text-white">
+                            {editingTx.id ? 'Edit Transaction' : 'New Transaction'}
+                        </h3>
+                        <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white">
+                            <X size={20} />
+                        </button>
+                    </div>
+                    <div className="p-6 space-y-4">
+                        {/* Type Toggle */}
+                        <div className="flex bg-slate-800 rounded-lg p-1">
+                            <button 
+                                onClick={() => setEditingTx({...editingTx, type: 'expense'})}
+                                className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${editingTx.type === 'expense' ? 'bg-rose-500/20 text-rose-400' : 'text-slate-400'}`}
+                            >
+                                Expense
+                            </button>
+                            <button 
+                                onClick={() => setEditingTx({...editingTx, type: 'income'})}
+                                className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${editingTx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-400'}`}
+                            >
+                                Income
+                            </button>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">DESCRIPTION</label>
+                            <input 
+                                value={editingTx.description}
+                                onChange={e => setEditingTx({...editingTx, description: e.target.value})}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                placeholder="e.g. Grocery, Salary"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                             <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">AMOUNT</label>
+                                <input 
+                                    type="number"
+                                    value={editingTx.amount}
+                                    onChange={e => setEditingTx({...editingTx, amount: Number(e.target.value)})}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                />
+                             </div>
+                             <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">DATE</label>
+                                <input 
+                                    type="date"
+                                    value={editingTx.date}
+                                    onChange={e => setEditingTx({...editingTx, date: e.target.value})}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                />
+                             </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">CATEGORY</label>
+                            <input 
+                                value={editingTx.category}
+                                onChange={e => setEditingTx({...editingTx, category: e.target.value})}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                placeholder="General"
+                            />
+                        </div>
+                    </div>
+                    <div className="p-4 border-t border-slate-800 flex justify-end gap-3 bg-slate-950/50">
+                        <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white text-sm">Cancel</button>
+                        <button onClick={handleSaveTx} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg">
+                            Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
         {/* TOP: Transaction Ledger (Expanded) */}
-        <div className="flex-1 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col overflow-hidden shadow-sm min-h-0">
+        <div className="flex-1 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col overflow-hidden shadow-sm min-h-0 relative">
             {/* Toolbar */}
             <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-950/50">
                 <div>
@@ -123,24 +260,34 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
                         Financial Ledger
                     </h2>
                 </div>
-                <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 w-4 h-4" />
-                    <input 
-                        type="text" 
-                        placeholder="Search transactions..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-blue-500 transition-all"
-                    />
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <div className="relative flex-1 sm:w-64">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 w-4 h-4" />
+                        <input 
+                            type="text" 
+                            placeholder="Search transactions..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-blue-500 transition-all"
+                        />
+                    </div>
+                    <button 
+                        onClick={handleOpenAdd}
+                        className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-lg shadow-lg flex items-center justify-center shrink-0"
+                        title="Add Transaction"
+                    >
+                        <Plus size={20} />
+                    </button>
                 </div>
             </div>
 
             {/* Table Header */}
             <div className="grid grid-cols-12 gap-2 px-4 py-3 border-b border-slate-800 bg-slate-900/80 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                <div className="col-span-6 sm:col-span-5">Description</div>
+                <div className="col-span-6 sm:col-span-4">Description</div>
                 <div className="col-span-3 sm:col-span-3">Date</div>
                 <div className="col-span-3 sm:col-span-2 text-right">Amount</div>
                 <div className="hidden sm:block sm:col-span-2 text-right">Category</div>
+                <div className="hidden sm:block sm:col-span-1 text-right">Actions</div>
             </div>
 
             {/* List */}
@@ -153,7 +300,7 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
                 ) : (
                     filteredTransactions.map(tx => (
                         <div key={tx.id} className="grid grid-cols-12 gap-2 px-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors items-center group text-sm">
-                            <div className="col-span-6 sm:col-span-5 flex items-center gap-2 overflow-hidden">
+                            <div className="col-span-6 sm:col-span-4 flex items-center gap-2 overflow-hidden">
                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                                     tx.type === 'income' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
                                 }`}>
@@ -177,6 +324,23 @@ const FinanceView: React.FC<FinanceViewProps> = ({ transactions }) => {
                                 <span className="text-[10px] px-2 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 truncate inline-block max-w-full">
                                     {tx.category}
                                 </span>
+                            </div>
+                            <div className="hidden sm:flex col-span-1 justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => handleOpenEdit(tx)} className="p-1.5 hover:bg-blue-600/20 text-blue-400 rounded-md">
+                                    <Edit2 size={14} />
+                                </button>
+                                <button onClick={() => handleDelete(tx.id)} className="p-1.5 hover:bg-red-600/20 text-red-400 rounded-md">
+                                    <Trash2 size={14} />
+                                </button>
+                            </div>
+                            {/* Mobile Actions Context Menu (Simplified for now - click edit via long press or similar could be added, but relying on desktop row hover for now) */}
+                             <div className="sm:hidden col-span-12 flex justify-end gap-3 mt-2 pt-2 border-t border-slate-800/30 opacity-60">
+                                <button onClick={() => handleOpenEdit(tx)} className="text-xs text-blue-400 flex items-center gap-1">
+                                    <Edit2 size={10} /> Edit
+                                </button>
+                                <button onClick={() => handleDelete(tx.id)} className="text-xs text-red-400 flex items-center gap-1">
+                                    <Trash2 size={10} /> Delete
+                                </button>
                             </div>
                         </div>
                     ))

@@ -61,7 +61,12 @@ const TasksView: React.FC<TasksViewProps> = ({ tasks, onTasksChange }) => {
                     type="text" 
                     value={newTaskTitle}
                     onChange={(e) => setNewTaskTitle(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault(); // Stop event bubbling/duplication
+                            handleAddTask();
+                        }
+                    }}
                     placeholder="Add a new task..." 
                     className="flex-1 bg-transparent focus:outline-none text-slate-200 placeholder-slate-500"
                 />

@@ -72,7 +72,13 @@ export const saveTasks = (tasks: Task[]): void => {
         if (idx >= 0) updated[idx] = t;
         else updated.push(t);
     });
-    localStorage.setItem(TASKS_KEY, JSON.stringify(updated));
+    
+    // Deduplicate logic: Map by ID to ensure uniqueness
+    const uniqueMap = new Map();
+    updated.forEach(t => uniqueMap.set(t.id, t));
+    const uniqueTasks = Array.from(uniqueMap.values());
+
+    localStorage.setItem(TASKS_KEY, JSON.stringify(uniqueTasks));
 }
 
 export const updateTaskStatus = (id: string, completed: boolean): void => {
@@ -99,6 +105,22 @@ export const addTransactions = (txs: FinanceTransaction[]): void => {
     const current = getTransactions();
     const newTxs = [...current, ...txs];
     localStorage.setItem(FINANCE_KEY, JSON.stringify(newTxs));
+}
+
+export const saveTransaction = (tx: FinanceTransaction): void => {
+    const current = getTransactions();
+    const idx = current.findIndex(t => t.id === tx.id);
+    if (idx >= 0) {
+        current[idx] = tx;
+    } else {
+        current.push(tx);
+    }
+    localStorage.setItem(FINANCE_KEY, JSON.stringify(current));
+}
+
+export const deleteTransaction = (id: string): void => {
+    const current = getTransactions().filter(t => t.id !== id);
+    localStorage.setItem(FINANCE_KEY, JSON.stringify(current));
 }
 
 // --- Chat History ---

@@ -589,7 +589,7 @@ const App: React.FC = () => {
 
         {activeTab === 'finance' && (
             <div className="flex-1 p-4 md:p-6 overflow-hidden">
-                <FinanceView transactions={transactions} />
+                <FinanceView transactions={transactions} onTransactionsChange={loadData} />
             </div>
         )}
 
@@ -783,6 +783,7 @@ const App: React.FC = () => {
              </div>
         )}
 
+         {/* Settings, Sidebar etc. are preserved via imports and main layout structure */}
          {activeTab === 'settings' && (
             <div className="flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="max-w-2xl mx-auto py-6 md:py-10">
@@ -907,7 +908,7 @@ const App: React.FC = () => {
                      <div className="pb-8 flex flex-col items-center justify-center gap-3 opacity-60 hover:opacity-100 transition-opacity">
                         <div className="flex items-center gap-2">
                            <div className="h-px w-12 bg-slate-800"></div>
-                           <span className="text-xs text-slate-500 font-medium">App Version 1.4</span>
+                           <span className="text-xs text-slate-500 font-medium">App Version 1.5</span>
                            <div className="h-px w-12 bg-slate-800"></div>
                         </div>
                         <button 

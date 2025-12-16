@@ -1,9 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { JournalEntry, CalendarEvent, ChatMessage, FinanceTransaction, Task } from "../types";
 
-// Primary Model: Gemini 2.5 Flash for speed and stability
-const MODEL_NAME = "gemini-2.5-flash"; 
-// Fallback: Gemini Flash Lite (Correct alias)
+// Primary Model: Gemini 3 Pro Preview for complex reasoning and accurate extraction
+const MODEL_NAME = "gemini-3-pro-preview"; 
+// Fallback: Gemini Flash Lite
 const FALLBACK_MODEL = "gemini-flash-lite-latest";
 
 // Helper for delay
@@ -379,6 +379,7 @@ export const generateEntryFromChat = async (
       2. Rephrase into a complete narrative.
       3. Set "hasContent" to TRUE only if input contains personal log/memory.
       4. For Calendar Events, ensure "startTime" and "endTime" are valid ISO-8601 strings (e.g. 2024-01-01T10:00:00).
+      5. ***CRITICAL FOR TRANSACTIONS***: Extract the EXACT numerical amount for 'amount'. Do not include currency symbols or text. If user says "50 rupees", amount is 50. If "5k", amount is 5000.
       
       PRIOR CONTEXT:
       ${contextTranscript}

@@ -3,8 +3,8 @@ import { JournalEntry, CalendarEvent, ChatMessage, FinanceTransaction, Task } fr
 
 // Primary Model: Gemini 2.5 Flash for speed and stability
 const MODEL_NAME = "gemini-2.5-flash"; 
-// Fallback: Gemini 2.5 Flash Lite (Lighter, efficient, good for fallback)
-const FALLBACK_MODEL = "gemini-2.5-flash-lite-latest";
+// Fallback: Gemini Flash Lite (Correct alias)
+const FALLBACK_MODEL = "gemini-flash-lite-latest";
 
 // Helper for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -18,6 +18,12 @@ async function runWithRetry<T>(operation: () => Promise<T>, retries = 3): Promis
       // Check for Rate Limit (429) or Server Overload (503/500)
       const isRateLimit = error.status === 429 || error.message?.includes('429') || error.message?.includes('quota');
       const isServerIssue = error.status === 503 || error.status === 500 || error.message?.includes('503') || error.message?.includes('500') || error.message?.includes('Internal error');
+      const isNotFound = error.status === 404 || error.message?.includes('404') || error.message?.includes('not found');
+
+      if (isNotFound) {
+         // If model not found, don't retry, just throw immediately so we can switch to fallback if applicable
+         throw error;
+      }
 
       if ((isRateLimit || isServerIssue) && i < retries - 1) {
         // Exponential backoff: 2s, 5s, 10s (Increased wait time)
@@ -210,9 +216,10 @@ export const sendMessageToGemini = async (
       // Handle Quota/Permission errors by falling back to lighter model/no search
       const isQuota = error.status === 429 || error.message?.includes('429') || error.message?.includes('quota');
       const isForbidden = error.status === 403 || error.message?.includes('403');
+      const isNotFound = error.status === 404 || error.message?.includes('404') || error.message?.includes('not found');
       
-      if (isForbidden || isQuota) {
-          console.warn(`Primary model failed (${isQuota ? 'Quota' : 'Forbidden'}). Switching to fallback...`);
+      if (isForbidden || isQuota || isNotFound) {
+          console.warn(`Primary model failed (${isQuota ? 'Quota' : isNotFound ? 'Not Found' : 'Forbidden'}). Switching to fallback...`);
           try {
               // Try Fallback Model (Flash Lite) without search to save resources
               const fallbackResult = await generateResponse(false, FALLBACK_MODEL);
@@ -371,6 +378,7 @@ export const generateEntryFromChat = async (
       1. Record past tense actions.
       2. Rephrase into a complete narrative.
       3. Set "hasContent" to TRUE only if input contains personal log/memory.
+      4. For Calendar Events, ensure "startTime" and "endTime" are valid ISO-8601 strings (e.g. 2024-01-01T10:00:00).
       
       PRIOR CONTEXT:
       ${contextTranscript}

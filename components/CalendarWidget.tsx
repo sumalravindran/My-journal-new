@@ -46,6 +46,10 @@ const CalendarWidget: React.FC<CalendarWidgetProps> = ({ events, onEventsChange 
     return result;
   };
 
+  const isValidDate = (d: Date) => {
+      return d instanceof Date && !isNaN(d.getTime());
+  };
+
   const handlePrev = () => {
     if (viewMode === 'month') setCurrentDate(addMonths(currentDate, -1));
     else if (viewMode === 'week') setCurrentDate(addDays(currentDate, -7));
@@ -127,6 +131,9 @@ const CalendarWidget: React.FC<CalendarWidgetProps> = ({ events, onEventsChange 
   const getEventsForDay = (date: Date) => {
     return events.filter(e => {
         const eDate = new Date(e.startTime);
+        // Safety check for invalid dates to prevent crashes
+        if (!isValidDate(eDate)) return false;
+
         return eDate.getDate() === date.getDate() && 
                eDate.getMonth() === date.getMonth() && 
                eDate.getFullYear() === date.getFullYear();
@@ -219,6 +226,8 @@ const CalendarWidget: React.FC<CalendarWidgetProps> = ({ events, onEventsChange 
                                 ))}
                                 {dayEvents.map(evt => {
                                     const start = new Date(evt.startTime);
+                                    if (!isValidDate(start)) return null; // Safety check
+
                                     const top = (start.getHours() * 60 + start.getMinutes()) * (80 / 60); // 80px per hour
                                     return (
                                         <div 
@@ -258,12 +267,15 @@ const CalendarWidget: React.FC<CalendarWidgetProps> = ({ events, onEventsChange 
                             </div>
                             <div className="flex-1 relative">
                                 {/* Event Plotting */}
-                                {dayEvents.filter(e => new Date(e.startTime).getHours() === h).map(evt => (
+                                {dayEvents.filter(e => {
+                                    const d = new Date(e.startTime);
+                                    return isValidDate(d) && d.getHours() === h;
+                                }).map(evt => (
                                      <div key={evt.id} className="absolute top-2 left-2 right-2 bg-blue-600/80 rounded p-2 text-sm text-white border border-blue-500 shadow-lg">
                                         <div className="font-bold truncate">{evt.title}</div>
                                         <div className="text-blue-100 flex items-center gap-2 text-xs">
                                             <Clock size={10}/>
-                                            {new Date(evt.startTime).toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'})} - {new Date(evt.endTime).toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'})}
+                                            {isValidDate(new Date(evt.startTime)) ? new Date(evt.startTime).toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'}) : '--:--'} - {isValidDate(new Date(evt.endTime)) ? new Date(evt.endTime).toLocaleTimeString([],{hour:'2-digit', minute:'2-digit'}) : '--:--'}
                                         </div>
                                         {evt.description && <div className="mt-1 text-xs opacity-80 truncate">{evt.description}</div>}
                                      </div>

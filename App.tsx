@@ -162,12 +162,22 @@ const App: React.FC = () => {
           // 1. Process Calendar Events
           let newEvents: CalendarEvent[] = [];
           if (generatedData.calendarEvents?.length > 0) {
-                newEvents = generatedData.calendarEvents.map((evt: any, i: number) => ({
-                    ...evt,
-                    id: `${entryId}-evt-${i}`,
-                    linkedEntryId: shouldCreateEntry ? entryId : undefined
-                }));
-                addCalendarEvents(newEvents);
+                newEvents = generatedData.calendarEvents
+                    .filter((evt: any) => {
+                         // Validate date format to prevent calendar crashes
+                         const start = new Date(evt.startTime);
+                         const end = new Date(evt.endTime);
+                         return !isNaN(start.getTime()) && !isNaN(end.getTime());
+                    })
+                    .map((evt: any, i: number) => ({
+                        ...evt,
+                        id: `${entryId}-evt-${i}`,
+                        linkedEntryId: shouldCreateEntry ? entryId : undefined
+                    }));
+                
+                if (newEvents.length > 0) {
+                     addCalendarEvents(newEvents);
+                }
           }
 
           // 2. Process Tasks
@@ -437,6 +447,10 @@ const App: React.FC = () => {
   const updateCurrentChatMessages = (msgs: ChatMessage[]) => {
       setPersonalMessages(msgs);
       saveChatHistory(JournalMode.PERSONAL, msgs);
+      // Reset AI processing cursor if chat is cleared
+      if (msgs.length === 0) {
+          personalProcessedCountRef.current = 0;
+      }
   };
 
   const filteredEntries = entries.filter(e => 
@@ -558,6 +572,13 @@ const App: React.FC = () => {
                 hasApiKey={hasConfiguredKey}
                 onOpenSettings={() => setActiveTab('settings')}
             />
+        )}
+
+        {/* CALENDAR VIEW - Added */}
+        {activeTab === 'calendar' && (
+            <div className="flex-1 p-4 md:p-6 overflow-hidden">
+                <CalendarWidget events={calendarEvents} onEventsChange={loadData} />
+            </div>
         )}
 
         {activeTab === 'tasks' && (
@@ -886,7 +907,7 @@ const App: React.FC = () => {
                      <div className="pb-8 flex flex-col items-center justify-center gap-3 opacity-60 hover:opacity-100 transition-opacity">
                         <div className="flex items-center gap-2">
                            <div className="h-px w-12 bg-slate-800"></div>
-                           <span className="text-xs text-slate-500 font-medium">App Version 1.3</span>
+                           <span className="text-xs text-slate-500 font-medium">App Version 1.4</span>
                            <div className="h-px w-12 bg-slate-800"></div>
                         </div>
                         <button 

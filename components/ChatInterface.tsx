@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Cpu, Bot, CheckCircle, RefreshCw, Sparkles, Mic, MicOff, Paperclip, X, FileText, Image as ImageIcon, AlertTriangle, Settings } from 'lucide-react';
+import { Send, Cpu, Bot, CheckCircle, RefreshCw, Sparkles, Mic, MicOff, Paperclip, X, FileText, Image as ImageIcon, AlertTriangle, Settings, Trash2, ArrowDown } from 'lucide-react';
 import { ChatMessage, JournalEntry, Task, CalendarEvent } from '../types';
 import { sendMessageToGemini } from '../services/geminiService';
 
@@ -53,6 +53,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onUpdateMessage
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +74,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onUpdateMessage
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, isTyping, attachment]);
+
+  // Handle Scroll to show/hide "Scroll to Bottom" button
+  const handleScroll = () => {
+      if (scrollRef.current) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+          // Show button if user is more than 100px away from bottom
+          const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+          setShowScrollButton(!isAtBottom);
+      }
+  };
+
+  const scrollToBottom = () => {
+      if (scrollRef.current) {
+          scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+      }
+  };
+
+  const handleClearChat = () => {
+      if (window.confirm("Are you sure you want to clear the chat history? This cannot be undone.")) {
+          onUpdateMessages([]);
+      }
+  };
 
   // --- Speech Recognition Setup ---
   useEffect(() => {
@@ -252,23 +275,39 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onUpdateMessage
                 </div>
             </div>
             
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800">
-                {isConsolidating ? (
-                    <>
-                        <RefreshCw size={12} className="text-blue-500 animate-spin" />
-                        <span className="text-[10px] text-blue-400 font-medium">Syncing...</span>
-                    </>
-                ) : (
-                    <>
-                        <CheckCircle size={12} className="text-emerald-500" />
-                        <span className="text-[10px] text-emerald-500 font-medium">Saved</span>
-                    </>
-                )}
+            <div className="flex items-center gap-3">
+                {/* Clear Chat Button */}
+                <button 
+                    onClick={handleClearChat}
+                    className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-red-400 transition-colors"
+                    title="Clear Chat History"
+                >
+                    <Trash2 size={18} />
+                </button>
+
+                {/* Sync Status Pill */}
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800">
+                    {isConsolidating ? (
+                        <>
+                            <RefreshCw size={12} className="text-blue-500 animate-spin" />
+                            <span className="text-[10px] text-blue-400 font-medium">Syncing...</span>
+                        </>
+                    ) : (
+                        <>
+                            <CheckCircle size={12} className="text-emerald-500" />
+                            <span className="text-[10px] text-emerald-500 font-medium">Saved</span>
+                        </>
+                    )}
+                </div>
             </div>
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth" ref={scrollRef}>
+        <div 
+            className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth" 
+            ref={scrollRef}
+            onScroll={handleScroll}
+        >
             {messages.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-full text-slate-600 opacity-50">
                     <Bot size={48} className="mb-4" />
@@ -320,6 +359,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onUpdateMessage
                 </div>
             )}
         </div>
+
+        {/* Floating Scroll to Bottom Button */}
+        {showScrollButton && (
+            <button 
+                onClick={scrollToBottom}
+                className="absolute bottom-24 right-4 md:right-8 bg-slate-800/80 backdrop-blur-md text-slate-200 p-2.5 rounded-full shadow-lg border border-slate-700 z-30 hover:bg-slate-700 hover:text-white transition-all animate-in fade-in slide-in-from-bottom-2"
+                title="Scroll to Bottom"
+            >
+                <ArrowDown size={20} />
+            </button>
+        )}
 
         {/* Attachment Preview (Sticky) */}
         {attachment && (

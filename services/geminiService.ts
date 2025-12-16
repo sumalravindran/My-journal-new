@@ -477,8 +477,16 @@ export const processUploadedFile = async (text: string): Promise<any> => {
 
     const prompt = `
       You are a Data Migration Specialist.
-      Analyze the text and extract structured data (entries, transactions).
-      If unstructured, put summary in 'unstructured_summary'.
+      Analyze the text (which may be a JSON export, a document, or notes) and extract structured data into four categories:
+      1. 'entries': Personal memories, journal logs, and notes.
+      2. 'tasks': Action items and to-do lists.
+      3. 'calendarEvents': Appointments, meetings, and schedules with specific times.
+      4. 'transactions': Financial expenses and income.
+
+      For Calendar Events: Ensure dates are in ISO-8601 format. If year is missing, assume current year.
+      For Transactions: Extract exact numerical amount.
+
+      If data is unstructured or unclear, put a summary in 'unstructured_summary'.
       
       Text Content:
       ${safeText}
@@ -517,6 +525,30 @@ export const processUploadedFile = async (text: string): Promise<any> => {
                                         category: { type: Type.STRING },
                                         date: { type: Type.STRING }
                                     }
+                                }
+                            },
+                            tasks: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        title: { type: Type.STRING },
+                                        dueDate: { type: Type.STRING }
+                                    },
+                                    required: ["title"]
+                                }
+                            },
+                            calendarEvents: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        title: { type: Type.STRING },
+                                        startTime: { type: Type.STRING },
+                                        endTime: { type: Type.STRING },
+                                        description: { type: Type.STRING }
+                                    },
+                                    required: ["title", "startTime", "endTime"]
                                 }
                             },
                             unstructured_summary: { type: Type.STRING }

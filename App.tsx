@@ -397,6 +397,29 @@ const App: React.FC = () => {
                 addedCount += newTxs.length;
             }
 
+            if (data.tasks?.length) {
+                const newTasks = data.tasks.map((t: any) => ({
+                    id: Date.now().toString() + Math.random(),
+                    title: t.title || "Imported Task",
+                    completed: false,
+                    dueDate: t.dueDate || new Date().toISOString()
+                }));
+                saveTasks(newTasks);
+                addedCount += newTasks.length;
+            }
+
+            if (data.calendarEvents?.length) {
+                const newEvents = data.calendarEvents.map((evt: any) => ({
+                    id: Date.now().toString() + Math.random(),
+                    title: evt.title || "Imported Event",
+                    startTime: evt.startTime || new Date().toISOString(),
+                    endTime: evt.endTime || new Date(Date.now() + 3600000).toISOString(),
+                    description: evt.description || ""
+                }));
+                addCalendarEvents(newEvents);
+                addedCount += newEvents.length;
+            }
+
             if (data.unstructured_summary && !addedCount) {
                 const summaryEntry: JournalEntry = {
                     id: Date.now().toString(),

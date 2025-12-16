@@ -130,7 +130,6 @@ const App: React.FC = () => {
           const newInput = messages.slice(processedCountRef.current);
 
           // CRITICAL FIX: Update cursor immediately to prevent race conditions/duplicates
-          // This "claims" the messages so subsequent calls (before this one finishes) won't process them again.
           processedCountRef.current = messages.length;
 
           // Extract Media from new messages to attach to the entry
@@ -147,14 +146,20 @@ const App: React.FC = () => {
 
           const generatedData = await generateEntryFromChat(newInput, context);
           
-          // Generate an ID for linking, even if entry is not created immediately
+          // Generate an ID for linking
           const entryId = Date.now().toString();
+
+          // Helper: Get raw user text (excluding attachment tags) to use as fallback
+          const rawUserText = newInput
+            .filter(m => m.role === 'user')
+            .map(m => m.text.replace(/\[Attachment:.*?\]/gi, '').trim())
+            .filter(t => t.length > 0)
+            .join('\n');
           
           // Determine if we should create a Journal Entry
-          // STRICT RULE: Only if hasContent is explicitly true (meaning personal narrative) OR we have media.
           const shouldCreateEntry = generatedData.hasContent === true || collectedMedia.length > 0;
 
-          // 1. Process Calendar Events (Always)
+          // 1. Process Calendar Events
           let newEvents: CalendarEvent[] = [];
           if (generatedData.calendarEvents?.length > 0) {
                 newEvents = generatedData.calendarEvents.map((evt: any, i: number) => ({
@@ -165,7 +170,7 @@ const App: React.FC = () => {
                 addCalendarEvents(newEvents);
           }
 
-          // 2. Process Tasks (Always)
+          // 2. Process Tasks
           let newTasks: Task[] = [];
           if (generatedData.tasks?.length > 0) {
                 newTasks = generatedData.tasks.map((t: any, i: number) => ({
@@ -178,7 +183,7 @@ const App: React.FC = () => {
                 saveTasks(newTasks);
           }
 
-          // 3. Process Transactions (Always)
+          // 3. Process Transactions
           let newTxs: FinanceTransaction[] = [];
           if (generatedData.transactions?.length > 0) {
                 newTxs = generatedData.transactions.map((tx: any, i: number) => ({
@@ -191,22 +196,46 @@ const App: React.FC = () => {
           }
 
           // 4. Save Entry (CONDITIONAL)
-          if (shouldCreateEntry && (generatedData.content || collectedMedia.length > 0)) {
-                const newEntry: JournalEntry = {
-                    id: entryId,
-                    title: generatedData.title || `Log: ${new Date().toLocaleTimeString()}`,
-                    content: generatedData.content || (collectedMedia.length > 0 ? "Media Entry" : ""),
-                    date: new Date().toISOString(),
-                    mode: JournalMode.PERSONAL,
-                    tags: generatedData.tags || [],
-                    media: collectedMedia,
-                    // Store snapshots of the generated items directly in the entry for better display
-                    tasks: newTasks,
-                    calendarEvents: newEvents,
-                    transactions: newTxs,
-                    lastModified: Date.now()
-                };
-                saveEntry(newEntry);
+          if (shouldCreateEntry) {
+                let finalTitle = generatedData.title;
+                let finalContent = generatedData.content;
+
+                // Fallback Title: Use user's typed text if AI failed to return a title
+                if (!finalTitle || finalTitle.trim() === "") {
+                    if (rawUserText) {
+                         const firstLine = rawUserText.split('\n')[0];
+                         finalTitle = firstLine.length > 50 ? firstLine.substring(0, 50) + "..." : firstLine;
+                    } else if (collectedMedia.length > 0) {
+                         finalTitle = "Photo Memory";
+                    } else {
+                         finalTitle = `Log: ${new Date().toLocaleTimeString()}`;
+                    }
+                }
+
+                // Fallback Content: Use user's typed text if AI failed to return content
+                if (!finalContent || finalContent.trim() === "") {
+                    if (rawUserText) {
+                        finalContent = rawUserText;
+                    }
+                    // If no text but has media, leave content empty (don't force "Media Entry")
+                }
+
+                if (finalContent || collectedMedia.length > 0) {
+                    const newEntry: JournalEntry = {
+                        id: entryId,
+                        title: finalTitle,
+                        content: finalContent || "",
+                        date: new Date().toISOString(),
+                        mode: JournalMode.PERSONAL,
+                        tags: generatedData.tags || [],
+                        media: collectedMedia,
+                        tasks: newTasks,
+                        calendarEvents: newEvents,
+                        transactions: newTxs,
+                        lastModified: Date.now()
+                    };
+                    saveEntry(newEntry);
+                }
           }
           
           // Refresh if any data was processed
@@ -216,8 +245,6 @@ const App: React.FC = () => {
           
       } catch (error) {
           console.error("Auto-sync failed", error);
-          // Note: We do NOT rollback processedCountRef here to avoid stuck loops on error.
-          // The messages are considered "consumed" even if processing failed, to prevent endless retries of bad data.
       } finally {
           setIsAutoSaving(false);
       }
@@ -229,7 +256,6 @@ const App: React.FC = () => {
       
       if (messages.length > processedCountRef.current) {
           if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
-          // Reduced timeout to 2000ms for snappier experience
           autoSyncTimeoutRef.current = setTimeout(() => {
               handleAutoSync();
           }, 2000); 
@@ -736,12 +762,6 @@ const App: React.FC = () => {
              </div>
         )}
 
-        {activeTab === 'calendar' && (
-            <div className="flex-1 p-4 md:p-6 overflow-hidden">
-                <CalendarWidget events={calendarEvents} onEventsChange={loadData} />
-            </div>
-        )}
-
          {activeTab === 'settings' && (
             <div className="flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="max-w-2xl mx-auto py-6 md:py-10">
@@ -860,6 +880,32 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                         </div>
+                     </div>
+
+                     {/* NEW FOOTER FOR MOBILE UPDATES */}
+                     <div className="pb-8 flex flex-col items-center justify-center gap-3 opacity-60 hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-2">
+                           <div className="h-px w-12 bg-slate-800"></div>
+                           <span className="text-xs text-slate-500 font-medium">App Version 1.3</span>
+                           <div className="h-px w-12 bg-slate-800"></div>
+                        </div>
+                        <button 
+                            onClick={() => {
+                                // Attempt to clear cache and reload
+                                if ('serviceWorker' in navigator) {
+                                    navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                                        for(let registration of registrations) {
+                                            registration.unregister();
+                                        }
+                                    });
+                                }
+                                window.location.reload();
+                            }}
+                            className="flex items-center gap-2 px-4 py-2 bg-slate-800 rounded-full text-xs font-bold text-blue-400 hover:bg-slate-700 transition-colors"
+                        >
+                            <RefreshCw size={12} className={isSyncing ? "animate-spin" : ""} />
+                            Check for Updates / Reload
+                        </button>
                      </div>
                 </div>
             </div>
